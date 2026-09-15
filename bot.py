@@ -1,5 +1,5 @@
 # ==============================================================================
-# BOT ORO 15M (Ejecución cada 5 min con señal de vida)
+# BOT ORO 15M (Vivo cada 5 min + Reporte Obligatorio cada 15 min)
 # ==============================================================================
 
 from datetime import datetime
@@ -47,9 +47,9 @@ def ejecutar_revision():
       print("-> Datos insuficientes.")
       return
 
-    # 2. SEÑAL DE VIDA CADA 5 MINUTOS
+    # 2. SEÑAL DE VIDA (Se enviará siempre que GitHub corra el bot, cada ~5 min)
     precio_actual_vivo = df["Close"].iloc[-1]
-    msg_vivo = f"🤖 *BOT VIVO* | {ahora.strftime('%H:%M')} | Oro: `{precio_actual_vivo:.2f}`"
+    msg_vivo = f"🤖 *BOT VIVO* | {ahora.strftime('%H:%M')} | Precio Actual: `{precio_actual_vivo:.2f}`"
     enviar_alerta(msg_vivo)
 
     # 3. Cálculo de indicadores (Heikin-Ashi, RSI, ATR)
@@ -97,7 +97,7 @@ def ejecutar_revision():
     ha["Signal_Sell"] = ha["Prev_Indecision"] & (ha["RSI"] < 50) & (~ha["Is_Green"]) & ha["En_Horario"]
     ha["Signal_Buy"] = ha["Prev_Indecision"] & (ha["RSI"] > 50) & (ha["Is_Green"]) & ha["En_Horario"]
 
-    # 4. EVITAR SEÑALES DUPLICADAS: Buscar la última vela que YA cerró
+    # 4. BUSCAR LA ÚLTIMA VELA DE 15 MINUTOS QUE YA CERRÓ
     velas_cerradas = ha[ha.index + pd.Timedelta(minutes=15) <= ahora]
     if len(velas_cerradas) == 0:
       return
@@ -108,42 +108,55 @@ def ejecutar_revision():
     
     # Calculamos hace cuántos minutos cerró esta vela
     minutos_desde_cierre = (ahora - hora_cierre_vela).total_seconds() / 60.0
-    
-    print(f"Vela evaluada: {hora_inicio_vela.strftime('%H:%M')} (Cerró hace {minutos_desde_cierre:.1f} minutos)")
 
-    # 5. EVALUACIÓN DE ESTRATEGIA (Solo si la vela acaba de cerrar en los últimos 7 minutos)
-    if 0 <= minutos_desde_cierre < 7.0:
+    # 5. REPORTE DE 15 MINUTOS (Solo si la vela acaba de cerrar en los últimos ~5 minutos)
+    # Así evitamos que te mande el resumen 3 veces por vela.
+    if 0 <= minutos_desde_cierre < 5.5:
+      precio_cierre_vela = ultima_vela["Close"]
+      rsi_val = ultima_vela["RSI"]
+      atr_val = ultima_vela["ATR"]
+
       if ultima_vela["En_Horario"]:
-        precio_cierre_vela = ultima_vela["Close"]
-        rsi_val = ultima_vela["RSI"]
-        atr_val = ultima_vela["ATR"]
-
         if ultima_vela["Signal_Buy"]:
           sl = precio_cierre_vela - (atr_val * 1.2)
           msg = (
-              f"🟢 *¡SEÑAL DE COMPRA (BUY) - ORO!* 🟢\n\n"
-              f"🕒 Hora Vela: {hora_inicio_vela.strftime('%H:%M')}\n"
-              f"📥 Precio Cierre: `{precio_cierre_vela:.2f}`\n"
-              f"🛡️ Stop Loss: `{sl:.2f}`\n"
-              f"📊 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`"
+              f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')})*\n\n"
+              f"🟢 *PRECIO ENTRADA:* `{precio_cierre_vela:.2f}`\n"
+              f"🛡️ *SL:* `{sl:.2f}`\n"
+              f"📈 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`\n\n"
+              f"✅ *- RESUMEN - ENTRADA (COMPRA)*"
           )
           enviar_alerta(msg)
         elif ultima_vela["Signal_Sell"]:
           sl = precio_cierre_vela + (atr_val * 1.2)
           msg = (
-              f"🔴 *¡SEÑAL DE VENTA (SELL) - ORO!* 🔴\n\n"
-              f"🕒 Hora Vela: {hora_inicio_vela.strftime('%H:%M')}\n"
-              f"📥 Precio Cierre: `{precio_cierre_vela:.2f}`\n"
-              f"🛡️ Stop Loss: `{sl:.2f}`\n"
-              f"📊 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`"
+              f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')})*\n\n"
+              f"🔴 *PRECIO ENTRADA:* `{precio_cierre_vela:.2f}`\n"
+              f"🛡️ *SL:* `{sl:.2f}`\n"
+              f"📉 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`\n\n"
+              f"✅ *- RESUMEN - ENTRADA (VENTA)*"
           )
           enviar_alerta(msg)
         else:
-          print("Mercado en horario, pero sin señales de trading en este cierre.")
+          # Mercado en horario, pero SIN SEÑAL
+          msg = (
+              f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')})*\n\n"
+              f"📌 *PRECIO CIERRE:* `{precio_cierre_vela:.2f}`\n"
+              f"⚖️ RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`\n\n"
+              f"⏸️ *- RESUMEN - SIN SEÑAL -*"
+          )
+          enviar_alerta(msg)
       else:
-        print(f"⏳ Fuera de horario de operación. No se buscarán señales.")
+        # Mercado cerrado / Fuera de horario
+        msg = (
+              f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')})*\n\n"
+              f"📌 *PRECIO CIERRE:* `{precio_cierre_vela:.2f}`\n"
+              f"⚖️ RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`\n\n"
+              f"💤 *- RESUMEN - SIN SEÑAL (FUERA DE HORARIO) -*"
+          )
+        enviar_alerta(msg)
     else:
-      print("Esta vela ya fue evaluada en un ciclo anterior de 5 minutos. No se enviarán alertas repetidas.")
+      print(f"Vela de las {hora_inicio_vela.strftime('%H:%M')} ya fue reportada antes.")
 
   except Exception as e:
     print(f"Error general en ejecución: {e}")
