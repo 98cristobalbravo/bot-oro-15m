@@ -1,5 +1,5 @@
 # ==============================================================================
-# BOT DE PRUEBA CADA 1 MINUTO - ORO
+# BOT ORO 15M (Ejecución cada 5 min con señal de vida)
 # ==============================================================================
 
 from datetime import datetime
@@ -24,12 +24,14 @@ def enviar_alerta(mensaje):
     print(f"Excepción de red en Telegram: {e}")
 
 def ejecutar_revision():
-  print("Consultando mercado de Oro (GC=F) en 1m para PRUEBA...")
+  # Obtenemos la hora actual en Chile
+  ahora = pd.Timestamp.now(tz="America/Santiago")
+  print(f"Ejecutando bot a las {ahora.strftime('%H:%M')}...")
 
   try:
-    # 1. CAMBIO A VELAS DE 1 MINUTO
+    # 1. Descargamos datos de 15 minutos
     df = yf.download(
-        "GC=F", period="5d", interval="1m", auto_adjust=False, progress=False
+        "GC=F", period="5d", interval="15m", auto_adjust=False, progress=False
     )
     if isinstance(df.columns, pd.MultiIndex):
       df.columns = df.columns.get_level_values(0)
@@ -45,7 +47,12 @@ def ejecutar_revision():
       print("-> Datos insuficientes.")
       return
 
-    # Heikin-Ashi y cálculo de indicadores
+    # 2. SEÑAL DE VIDA CADA 5 MINUTOS
+    precio_actual_vivo = df["Close"].iloc[-1]
+    msg_vivo = f"🤖 *BOT VIVO* | {ahora.strftime('%H:%M')} | Oro: `{precio_actual_vivo:.2f}`"
+    enviar_alerta(msg_vivo)
+
+    # 3. Cálculo de indicadores (Heikin-Ashi, RSI, ATR)
     ha = pd.DataFrame(index=df.index)
     ha["Open"] = df["Open"]
     ha["High"] = df["High"]
@@ -78,38 +85,68 @@ def ejecutar_revision():
     true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     ha["ATR"] = true_range.ewm(com=13, adjust=False).mean()
 
-    # Indecisión
+    # Indecisión y Horario
     ha["Range"] = ha["HA_High"] - ha["HA_Low"]
     ha["Body"] = abs(ha["HA_Close"] - ha["HA_Open"])
     ha["Is_Indecision"] = (ha["Body"] <= (ha["Range"] * 0.20)) & (ha["Range"] > 0)
     ha["Prev_Indecision"] = ha["Is_Indecision"].shift(1).fillna(False)
 
-    # 2. SE ELIMINA EL BLOQUEO DE HORARIO (Siempre es True para la prueba)
-    ha["En_Horario"] = True
+    tiempo_decimal = ha.index.hour + ha.index.minute / 60.0
+    ha["En_Horario"] = (tiempo_decimal >= 7.0) & (tiempo_decimal <= 14.75)
 
-    ha["Signal_Sell"] = ha["Prev_Indecision"] & (ha["RSI"] < 50) & (~ha["Is_Green"])
-    ha["Signal_Buy"] = ha["Prev_Indecision"] & (ha["RSI"] > 50) & (ha["Is_Green"])
+    ha["Signal_Sell"] = ha["Prev_Indecision"] & (ha["RSI"] < 50) & (~ha["Is_Green"]) & ha["En_Horario"]
+    ha["Signal_Buy"] = ha["Prev_Indecision"] & (ha["RSI"] > 50) & (ha["Is_Green"]) & ha["En_Horario"]
 
-    idx = -2
-    precio_actual = df["Close"].iloc[idx]
-    hora_vela = ha.index[idx]
-    rsi_val = ha["RSI"].iloc[idx]
-    atr_val = ha["ATR"].iloc[idx]
+    # 4. EVITAR SEÑALES DUPLICADAS: Buscar la última vela que YA cerró
+    velas_cerradas = ha[ha.index + pd.Timedelta(minutes=15) <= ahora]
+    if len(velas_cerradas) == 0:
+      return
 
-    # 3. MENSAJE FORZADO A TELEGRAM CADA MINUTO PARA PROBAR LA CONEXIÓN
-    msg_prueba = f"🤖 *TEST 1 MINUTO* 🤖\nVela de las {hora_vela.strftime('%H:%M')} analizada.\nPrecio Oro: `{precio_actual:.2f}`"
-    enviar_alerta(msg_prueba)
+    ultima_vela = velas_cerradas.iloc[-1]
+    hora_inicio_vela = ultima_vela.name
+    hora_cierre_vela = hora_inicio_vela + pd.Timedelta(minutes=15)
+    
+    # Calculamos hace cuántos minutos cerró esta vela
+    minutos_desde_cierre = (ahora - hora_cierre_vela).total_seconds() / 60.0
+    
+    print(f"Vela evaluada: {hora_inicio_vela.strftime('%H:%M')} (Cerró hace {minutos_desde_cierre:.1f} minutos)")
 
-    # Revisión de señales reales
-    if ha["Signal_Buy"].iloc[idx]:
-      sl = precio_actual - (atr_val * 1.2)
-      enviar_alerta(f"🟢 *SEÑAL DE COMPRA (BUY)* 🟢\nPrecio: `{precio_actual:.2f}` | RSI: `{rsi_val:.2f}`")
-    elif ha["Signal_Sell"].iloc[idx]:
-      sl = precio_actual + (atr_val * 1.2)
-      enviar_alerta(f"🔴 *SEÑAL DE VENTA (SELL)* 🔴\nPrecio: `{precio_actual:.2f}` | RSI: `{rsi_val:.2f}`")
+    # 5. EVALUACIÓN DE ESTRATEGIA (Solo si la vela acaba de cerrar en los últimos 7 minutos)
+    if 0 <= minutos_desde_cierre < 7.0:
+      if ultima_vela["En_Horario"]:
+        precio_cierre_vela = ultima_vela["Close"]
+        rsi_val = ultima_vela["RSI"]
+        atr_val = ultima_vela["ATR"]
+
+        if ultima_vela["Signal_Buy"]:
+          sl = precio_cierre_vela - (atr_val * 1.2)
+          msg = (
+              f"🟢 *¡SEÑAL DE COMPRA (BUY) - ORO!* 🟢\n\n"
+              f"🕒 Hora Vela: {hora_inicio_vela.strftime('%H:%M')}\n"
+              f"📥 Precio Cierre: `{precio_cierre_vela:.2f}`\n"
+              f"🛡️ Stop Loss: `{sl:.2f}`\n"
+              f"📊 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`"
+          )
+          enviar_alerta(msg)
+        elif ultima_vela["Signal_Sell"]:
+          sl = precio_cierre_vela + (atr_val * 1.2)
+          msg = (
+              f"🔴 *¡SEÑAL DE VENTA (SELL) - ORO!* 🔴\n\n"
+              f"🕒 Hora Vela: {hora_inicio_vela.strftime('%H:%M')}\n"
+              f"📥 Precio Cierre: `{precio_cierre_vela:.2f}`\n"
+              f"🛡️ Stop Loss: `{sl:.2f}`\n"
+              f"📊 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`"
+          )
+          enviar_alerta(msg)
+        else:
+          print("Mercado en horario, pero sin señales de trading en este cierre.")
+      else:
+        print(f"⏳ Fuera de horario de operación. No se buscarán señales.")
+    else:
+      print("Esta vela ya fue evaluada en un ciclo anterior de 5 minutos. No se enviarán alertas repetidas.")
 
   except Exception as e:
-    print(f"Error: {e}")
+    print(f"Error general en ejecución: {e}")
 
 if __name__ == "__main__":
   ejecutar_revision()
