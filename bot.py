@@ -1,5 +1,5 @@
 # ==============================================================================
-# BOT ORO 15M - ESTRATEGIA OFICIAL KAGGLE (HA + RSI + ATR 1.2x)
+# BOT ORO 15M - REPORTE INTELIGENTE (CON VENTANA ROBUSTA PARA GITHUB)
 # ==============================================================================
 
 from datetime import datetime
@@ -9,7 +9,6 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-# Obtenemos las credenciales
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -28,7 +27,6 @@ def ejecutar_revision():
   print(f"Ejecutando revisión de mercado a las {ahora.strftime('%H:%M')}...")
 
   try:
-    # 1. PARÁMETROS DEL SISTEMA (Idénticos a tu Kaggle)
     TICKER = "GC=F"
     PERIODO = "5d"
     RSI_PERIOD = 14
@@ -52,7 +50,7 @@ def ejecutar_revision():
       print("-> Datos insuficientes.")
       return
 
-    # 2. CÁLCULO HEIKIN-ASHI, RSI Y ATR (Exacto a tu script)
+    # Indicadores
     ha = pd.DataFrame(index=df.index)
     ha["Open"] = df["Open"]
     ha["High"] = df["High"]
@@ -77,7 +75,6 @@ def ejecutar_revision():
     ).min(axis=1)
     ha["Is_Green"] = ha["HA_Close"] >= ha["HA_Open"]
 
-    # RSI sobre Heikin-Ashi Close
     delta = ha["HA_Close"].diff()
     ganancia = delta.clip(lower=0)
     perdida = -delta.clip(upper=0)
@@ -86,7 +83,6 @@ def ejecutar_revision():
     rs = media_ganancia / media_perdida
     ha["RSI"] = 100 - (100 / (1 + rs))
 
-    # ATR (Average True Range)
     high_low = df["High"] - df["Low"]
     high_close = np.abs(df["High"] - df["Close"].shift())
     low_close = np.abs(df["Low"] - df["Close"].shift())
@@ -95,7 +91,6 @@ def ejecutar_revision():
     ).max(axis=1)
     ha["ATR"] = true_range.ewm(com=ATR_PERIOD - 1, adjust=False).mean()
 
-    # Condiciones de Indecisión
     ha["Range"] = ha["HA_High"] - ha["HA_Low"]
     ha["Body"] = abs(ha["HA_Close"] - ha["HA_Open"])
     ha["Is_Indecision"] = (ha["Body"] <= (ha["Range"] * 0.20)) & (
@@ -103,13 +98,11 @@ def ejecutar_revision():
     )
     ha["Prev_Indecision"] = ha["Is_Indecision"].shift(1).fillna(False)
 
-    # Horario Operativo (07:00 a 14:45 Chile)
     tiempo_decimal = ha.index.hour + ha.index.minute / 60.0
     ha["En_Horario"] = pd.Series(
         (tiempo_decimal >= 7.0) & (tiempo_decimal <= 14.75), index=ha.index
     )
 
-    # Señales exactas de tu backtest
     ha["Signal_Sell"] = (
         ha["Prev_Indecision"]
         & (ha["RSI"] < 50)
@@ -123,7 +116,6 @@ def ejecutar_revision():
         & ha["En_Horario"]
     )
 
-    # 3. FILTRO DE TIEMPO: Buscar la última vela de 15 min que ya cerró
     velas_cerradas = ha[ha.index + pd.Timedelta(minutes=15) <= ahora]
     if len(velas_cerradas) == 0:
       return
@@ -133,15 +125,14 @@ def ejecutar_revision():
     hora_cierre_vela = hora_inicio_vela + pd.Timedelta(minutes=15)
     minutos_desde_cierre = (ahora - hora_cierre_vela).total_seconds() / 60.0
 
-    # 4. ENVÍO DE DATOS CADA 15 MINUTOS (dentro de los primeros 5 min del cierre)
-    if 0 <= minutos_desde_cierre < 5.5:
+    # VENTANA AMPLIADA A 14.5 MINUTOS (Para que GitHub nunca se lo salte)
+    if 0 <= minutos_desde_cierre < 14.5:
       precio_cierre = ultima_vela["Close"]
       rsi_val = ultima_vela["RSI"]
       atr_val = ultima_vela["ATR"]
       
       estado_horario = "🟢 ABIERTO (En Horario)" if ultima_vela["En_Horario"] else "🔴 CERRADO (Fuera de horario)"
 
-      # Estructura solicitada: INFORMACIÓN + RESUMEN
       msg = f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')} - {hora_cierre_vela.strftime('%H:%M')})*\n\n"
       msg += f"🏢 *Estado:* {estado_horario}\n"
       msg += f"📌 *Precio Cierre:* `{precio_cierre:.2f}`\n"
@@ -153,18 +144,17 @@ def ejecutar_revision():
         msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
         msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
         msg += f"✅ *- RESUMEN - ENTRADA (COMPRA) -*"
-        enviar_alerta(msg)
       elif ultima_vela["Signal_Sell"]:
         sl = precio_cierre + (atr_val * ATR_MULTIPLIER)
         msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
         msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
         msg += f"✅ *- RESUMEN - ENTRADA (VENTA) -*"
-        enviar_alerta(msg)
       else:
         msg += f"⏸️ *- RESUMEN - SIN SEÑAL -"
-        enviar_alerta(msg)
+
+      enviar_alerta(msg)
     else:
-      print(f"Vela de las {hora_inicio_vela.strftime('%H:%M')} ya fue reportada.")
+      print(f"Vela de las {hora_inicio_vela.strftime('%H:%M')} fuera de ventana de envío.")
 
   except Exception as e:
     print(f"Error general en ejecución: {e}")
