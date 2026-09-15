@@ -2,7 +2,7 @@ name: Bot Oro 1m
 
 on:
   schedule:
-    - cron: '* * * * *'  # <-- Cambiado a cada 1 minuto
+    - cron: '*/5 * * * *' 
   workflow_dispatch:
 
 jobs:
