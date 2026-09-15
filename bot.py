@@ -1,5 +1,5 @@
 # ==============================================================================
-# BOT ORO 15M - REPORTE INTELIGENTE (CON VENTANA ROBUSTA PARA GITHUB)
+# BOT ORO 15M - REPORTE INTELIGENTE (FUERZA BRUTA / SIEMPRE ENVÍA LA ÚLTIMA VELA)
 # ==============================================================================
 
 from datetime import datetime
@@ -32,6 +32,8 @@ def ejecutar_revision():
     RSI_PERIOD = 14
     ATR_PERIOD = 14
     ATR_MULTIPLIER = 1.2
+
+    pd.set_option("future.no_silent_downcasting", True)
 
     df = yf.download(
         TICKER, period=PERIODO, interval="15m", auto_adjust=False, progress=False
@@ -120,41 +122,38 @@ def ejecutar_revision():
     if len(velas_cerradas) == 0:
       return
 
+    # Tomamos siempre la última vela cerrada sin restricciones de minutos
     ultima_vela = velas_cerradas.iloc[-1]
     hora_inicio_vela = ultima_vela.name
     hora_cierre_vela = hora_inicio_vela + pd.Timedelta(minutes=15)
-    minutos_desde_cierre = (ahora - hora_cierre_vela).total_seconds() / 60.0
+    
+    precio_cierre = ultima_vela["Close"]
+    rsi_val = ultima_vela["RSI"]
+    atr_val = ultima_vela["ATR"]
+    
+    estado_horario = "🟢 ABIERTO (En Horario)" if ultima_vela["En_Horario"] else "🔴 CERRADO (Fuera de horario)"
 
-    # VENTANA AMPLIADA A 14.5 MINUTOS (Para que GitHub nunca se lo salte)
-    if 0 <= minutos_desde_cierre < 14.5:
-      precio_cierre = ultima_vela["Close"]
-      rsi_val = ultima_vela["RSI"]
-      atr_val = ultima_vela["ATR"]
-      
-      estado_horario = "🟢 ABIERTO (En Horario)" if ultima_vela["En_Horario"] else "🔴 CERRADO (Fuera de horario)"
+    msg = f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')} - {hora_cierre_vela.strftime('%H:%M')})*\n\n"
+    msg += f"🏢 *Estado:* {estado_horario}\n"
+    msg += f"📌 *Precio Cierre:* `{precio_cierre:.2f}`\n"
+    msg += f"⚖️ *RSI:* `{rsi_val:.2f}` | *ATR (1.2x):* `{atr_val:.2f}`\n"
+    msg += f"🕯️ *Indecisión Previa:* {'Sí' if ultima_vela['Prev_Indecision'] else 'No'} | *HA Verde:* {'Sí' if ultima_vela['Is_Green'] else 'No'}\n\n"
 
-      msg = f"📊 *INFORMACIÓN: ORO 15M (Vela {hora_inicio_vela.strftime('%H:%M')} - {hora_cierre_vela.strftime('%H:%M')})*\n\n"
-      msg += f"🏢 *Estado:* {estado_horario}\n"
-      msg += f"📌 *Precio Cierre:* `{precio_cierre:.2f}`\n"
-      msg += f"⚖️ *RSI:* `{rsi_val:.2f}` | *ATR (1.2x):* `{atr_val:.2f}`\n"
-      msg += f"🕯️ *Indecisión Previa:* {'Sí' if ultima_vela['Prev_Indecision'] else 'No'} | *HA Verde:* {'Sí' if ultima_vela['Is_Green'] else 'No'}\n\n"
-
-      if ultima_vela["Signal_Buy"]:
-        sl = precio_cierre - (atr_val * ATR_MULTIPLIER)
-        msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
-        msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
-        msg += f"✅ *- RESUMEN - ENTRADA (COMPRA) -*"
-      elif ultima_vela["Signal_Sell"]:
-        sl = precio_cierre + (atr_val * ATR_MULTIPLIER)
-        msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
-        msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
-        msg += f"✅ *- RESUMEN - ENTRADA (VENTA) -*"
-      else:
-        msg += f"⏸️ *- RESUMEN - SIN SEÑAL -"
-
-      enviar_alerta(msg)
+    if ultima_vela["Signal_Buy"]:
+      sl = precio_cierre - (atr_val * ATR_MULTIPLIER)
+      msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
+      msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
+      msg += f"✅ *- RESUMEN - ENTRADA (COMPRA) -*"
+    elif ultima_vela["Signal_Sell"]:
+      sl = precio_cierre + (atr_val * ATR_MULTIPLIER)
+      msg += f"🟢 *PRECIO ENTRADA:* `{precio_cierre:.2f}`\n"
+      msg += f"🛡️ *SL:* `{sl:.2f}`\n\n"
+      msg += f"✅ *- RESUMEN - ENTRADA (VENTA) -*"
     else:
-      print(f"Vela de las {hora_inicio_vela.strftime('%H:%M')} fuera de ventana de envío.")
+      msg += f"⏸️ *- RESUMEN - SIN SEÑAL -"
+
+    enviar_alerta(msg)
+    print("¡Alerta enviada a Telegram con éxito!")
 
   except Exception as e:
     print(f"Error general en ejecución: {e}")
