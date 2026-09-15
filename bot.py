@@ -145,6 +145,8 @@ def ejecutar_revision():
         enviar_alerta(msg)
       else:
         print("Sin señales en esta vela.")
+    else:
+      print(f"⏳ Fuera de horario de operación (Vela de las {hora_vela.strftime('%H:%M')}). No se enviarán señales.")
 
   except Exception as e:
     print(f"Error: {e}")
