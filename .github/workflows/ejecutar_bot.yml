@@ -1,9 +1,12 @@
-name: Bot Oro 1m
+name: Bot Oro 15m
 
 on:
   schedule:
-    - cron: '*/5 * * * *' 
+    - cron: '*/5 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-bot:
@@ -27,3 +30,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python bot.py
+
+      - name: Guardar estado (última señal enviada)
+        run: |
+          git config user.name "bot-oro"
+          git config user.email "bot-oro@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "Actualiza estado del bot [skip ci]"
+          git push
