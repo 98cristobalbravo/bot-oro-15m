@@ -1,6 +1,8 @@
 # ==============================================================================
 # BOT DE MONITOREO Y ALERTAS (GITHUB ACTIONS) - ORO 15M
-# Heikin-Ashi + RSI(14) + ATR(14) x1.2  |  Heartbeat + señales dedupladas
+# Heikin-Ashi + RSI(14) + ATR(14) x1.2
+# Ventana operativa: 20:00 a 16:00 del día siguiente (cruza medianoche)
+# Heartbeat + señales dedupladas + probabilidad de señal en próxima vela
 # ==============================================================================
 
 import json
@@ -45,6 +47,12 @@ def cargar_estado():
 def guardar_estado(estado):
     with open(STATE_FILE, "w") as f:
         json.dump(estado, f)
+
+
+def en_horario_operativo(ts):
+    """Ventana operativa: 20:00 a 16:00 del día siguiente (cruza medianoche)."""
+    t = ts.hour + ts.minute / 60.0
+    return (t >= 20.0) or (t < 16.0)
 
 
 def ejecutar_revision():
@@ -105,14 +113,14 @@ def ejecutar_revision():
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         ha["ATR"] = true_range.ewm(com=13, adjust=False).mean()
 
-        # 4. Indecisión y Horario
+        # 4. Indecisión y Horario (20:00 a 16:00 del día siguiente)
         ha["Range"] = ha["HA_High"] - ha["HA_Low"]
         ha["Body"] = abs(ha["HA_Close"] - ha["HA_Open"])
         ha["Is_Indecision"] = (ha["Body"] <= (ha["Range"] * 0.20)) & (ha["Range"] > 0)
         ha["Prev_Indecision"] = ha["Is_Indecision"].shift(1).fillna(False)
 
         tiempo_decimal = ha.index.hour + ha.index.minute / 60.0
-        ha["En_Horario"] = (tiempo_decimal >= 7.0) & (tiempo_decimal <= 14.75)
+        ha["En_Horario"] = (tiempo_decimal >= 20.0) | (tiempo_decimal < 16.0)
 
         ha["Signal_Sell"] = ha["Prev_Indecision"] & (ha["RSI"] < 50) & (~ha["Is_Green"]) & ha["En_Horario"]
         ha["Signal_Buy"] = ha["Prev_Indecision"] & (ha["RSI"] > 50) & (ha["Is_Green"]) & ha["En_Horario"]
@@ -127,14 +135,32 @@ def ejecutar_revision():
 
         print(f"Vela cerrada {hora_vela_str} | Precio: {precio_actual:.2f} | RSI: {rsi_val:.2f}")
 
+        # --- Probabilidad de señal en la próxima vela ---
+        # Base histórica: de todas las velas de indecisión (dentro de horario) que hubo
+        # en la ventana de datos descargada, ¿qué % terminó realmente en una señal BUY/SELL?
+        mask_prevind_horario = ha["Prev_Indecision"] & ha["En_Horario"]
+        total_casos = int(mask_prevind_horario.sum())
+        total_con_señal = int((mask_prevind_horario & (ha["Signal_Buy"] | ha["Signal_Sell"])).sum())
+        prob_historica = (total_con_señal / total_casos * 100) if total_casos > 0 else 0.0
+
+        es_indecision_actual = bool(ha["Is_Indecision"].iloc[idx])
+        proxima_vela_time = hora_vela + pd.Timedelta(minutes=15)
+        proxima_en_horario = en_horario_operativo(proxima_vela_time)
+
+        if es_indecision_actual and proxima_en_horario:
+            prob_prox_vela = prob_historica
+        else:
+            prob_prox_vela = 0.0
+
         # --- Heartbeat: se envía SIEMPRE, en cada ejecución del workflow ---
-        estado_txt = "Dentro de horario ✅" if en_horario else "Fuera de horario ⏳"
+        estado_txt = "Dentro de ventana operativa ✅" if en_horario else "Fuera de ventana operativa (16:00–20:00) ⏳"
         heartbeat_msg = (
             f"🤖 *BOT VIVO*\n\n"
             f"🕒 Última vela: {hora_vela_str}\n"
             f"💰 Precio: `{precio_actual:.2f}`\n"
             f"📊 RSI: `{rsi_val:.2f}` | ATR: `{atr_val:.2f}`\n"
-            f"📅 {estado_txt}"
+            f"📅 {estado_txt}\n"
+            f"📈 Probabilidad de señal próxima vela: `{prob_prox_vela:.1f}%`"
         )
         enviar_mensaje(heartbeat_msg)
 
@@ -165,7 +191,7 @@ def ejecutar_revision():
             else:
                 print("Sin señales nuevas en esta vela.")
         else:
-            print(f"⏳ Fuera de horario de operación (Vela de las {hora_vela.strftime('%H:%M')}).")
+            print(f"⏳ Fuera de ventana operativa (Vela de las {hora_vela.strftime('%H:%M')}).")
 
         guardar_estado(estado)
 
